@@ -5,6 +5,7 @@ set -euo pipefail
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${STATE_ENCRYPTION_KEY:?STATE_ENCRYPTION_KEY is required}"
 : "${AVD_NAME:=cloud-android}"
+export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 export PATH="${ANDROID_HOME:-/usr/local/lib/android/sdk}/platform-tools:${ANDROID_HOME:-/usr/local/lib/android/sdk}/emulator:$PATH"
 TMP_DIR="$(mktemp -d /tmp/cloud-android-restore.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT

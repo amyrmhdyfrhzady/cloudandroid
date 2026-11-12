@@ -13,6 +13,7 @@ fi
 : "${STATE_ENCRYPTION_KEY:?STATE_ENCRYPTION_KEY is required}"
 : "${AVD_NAME:=cloud-android}"
 : "${STATE_CHUNK_MIB:=1800}"
+export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 export PATH="${ANDROID_HOME:-/usr/local/lib/android/sdk}/platform-tools:${ANDROID_HOME:-/usr/local/lib/android/sdk}/emulator:$PATH"
 
 AVD_DIR="$HOME/.android/avd/${AVD_NAME}.avd"

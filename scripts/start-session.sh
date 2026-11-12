@@ -7,6 +7,7 @@ set -euo pipefail
 : "${ANDROID_RUNTIME_MINUTES:=270}"
 ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
 export ANDROID_HOME
+export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 
 # Start a virtual display and a lightweight window manager for the emulator UI.
@@ -79,6 +80,22 @@ if [[ -e /dev/kvm ]]; then
   }
 else
   echo 'WARNING: /dev/kvm is unavailable; emulator may be extremely slow or fail.' >&2
+fi
+
+AVD_INI="$ANDROID_AVD_HOME/${AVD_NAME}.ini"
+AVD_DIR="$ANDROID_AVD_HOME/${AVD_NAME}.avd"
+if [[ ! -s "$AVD_INI" || ! -d "$AVD_DIR" ]]; then
+  echo "ERROR: AVD '$AVD_NAME' is not present in $ANDROID_AVD_HOME." >&2
+  echo "Expected metadata: $AVD_INI" >&2
+  echo "Run scripts/create-avd.sh before starting the emulator." >&2
+  find "$ANDROID_AVD_HOME" -maxdepth 2 -type f -printf '%p (%s bytes)\n' >&2 || true
+  exit 1
+fi
+if ! emulator -list-avds | grep -Fxq "$AVD_NAME"; then
+  echo "ERROR: Emulator does not list AVD '$AVD_NAME'." >&2
+  emulator -list-avds >&2 || true
+  cat "$AVD_INI" >&2 || true
+  exit 1
 fi
 
 echo "Starting Android Emulator (AVD: $AVD_NAME)..."
