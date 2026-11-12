@@ -64,20 +64,96 @@ sudo systemctl restart nginx
 rm -f /tmp/cloud-android-boot-complete
 
 # Start the emulator with the persistent userdata image in the AVD directory.
-emulator -avd "$AVD_NAME" -gpu swiftshader_indirect -no-snapshot -no-boot-anim -no-audio \
-  -camera-back none -camera-front none >/tmp/cloud-android-emulator.log 2>&1 &
-echo $! >/tmp/cloud-android-emulator.pid
-adb wait-for-device
-for _ in $(seq 1 180); do
-  BOOTED="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-  [[ "$BOOTED" == '1' ]] && break
-  sleep 2
+# Never use an unbounded `adb wait-for-device`: a failed emulator launch would
+# otherwise leave the Actions job apparently frozen until the 6-hour job timeout.
+EMULATOR_LOG=/tmp/cloud-android-emulator.log
+ADB_LOG=/tmp/cloud-android-adb.log
+rm -f "$EMULATOR_LOG" "$ADB_LOG"
+
+echo "Checking emulator acceleration..."
+if [[ -e /dev/kvm ]]; then
+  ls -l /dev/kvm
+  emulator -accel-check > /tmp/cloud-android-accel.log 2>&1 || {
+    echo 'WARNING: Emulator acceleration check failed; see diagnostic output:' >&2
+    cat /tmp/cloud-android-accel.log >&2 || true
+  }
+else
+  echo 'WARNING: /dev/kvm is unavailable; emulator may be extremely slow or fail.' >&2
+fi
+
+echo "Starting Android Emulator (AVD: $AVD_NAME)..."
+emulator -avd "$AVD_NAME" -port 5554 -accel auto \
+  -gpu swiftshader_indirect -no-snapshot -no-boot-anim -no-audio \
+  -camera-back none -camera-front none -verbose \
+  >"$EMULATOR_LOG" 2>&1 &
+EMULATOR_PID=$!
+echo "$EMULATOR_PID" >/tmp/cloud-android-emulator.pid
+
+adb start-server >"$ADB_LOG" 2>&1 || true
+
+# Wait at most 180 seconds for the emulator device to become online.
+DEVICE_READY=0
+for elapsed in $(seq 1 180); do
+  if adb devices 2>>"$ADB_LOG" | awk '$1 == "emulator-5554" && $2 == "device" { found=1 } END { exit !found }'; then
+    DEVICE_READY=1
+    echo "ADB device connected after approximately ${elapsed} seconds."
+    break
+  fi
+
+  if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
+    echo "ERROR: Emulator process exited before ADB became available." >&2
+    break
+  fi
+
+  if (( elapsed % 15 == 0 )); then
+    echo "Waiting for emulator ADB connection (${elapsed}/180 seconds)..."
+    adb devices -l 2>&1 | tee -a "$ADB_LOG" || true
+    tail -n 30 "$EMULATOR_LOG" || true
+  fi
+  sleep 1
 done
-[[ "$(adb shell getprop sys.boot_completed | tr -d '\r')" == '1' ]] || {
-  echo 'Android did not finish booting within six minutes.' >&2
-  tail -n 100 /tmp/cloud-android-emulator.log || true
+
+if (( DEVICE_READY == 0 )); then
+  echo 'ERROR: No online emulator device appeared within 180 seconds.' >&2
+  echo '--- Emulator process ---' >&2
+  ps -p "$EMULATOR_PID" -o pid,stat,etime,args >&2 || true
+  echo '--- ADB devices ---' >&2
+  adb devices -l >&2 || true
+  echo '--- ADB log (last 100 lines) ---' >&2
+  tail -n 100 "$ADB_LOG" >&2 || true
+  echo '--- Emulator log (last 160 lines) ---' >&2
+  tail -n 160 "$EMULATOR_LOG" >&2 || true
   exit 1
-}
+fi
+
+# An online ADB transport does not mean Android has completed booting.
+BOOTED=0
+for elapsed in $(seq 1 360); do
+  BOOT_PROP="$(timeout 15s adb -s emulator-5554 shell getprop sys.boot_completed 2>>"$ADB_LOG" | tr -d '\r' || true)"
+  if [[ "$BOOT_PROP" == '1' ]]; then
+    BOOTED=1
+    echo "Android boot completed after approximately ${elapsed} seconds."
+    break
+  fi
+
+  if (( elapsed % 15 == 0 )); then
+    echo "Android is still booting (${elapsed}/360 seconds)..."
+    timeout 15s adb -s emulator-5554 shell getprop dev.bootcomplete 2>&1 | tail -n 2 || true
+    tail -n 20 "$EMULATOR_LOG" || true
+  fi
+  sleep 1
+done
+
+if (( BOOTED == 0 )); then
+  echo 'ERROR: Emulator connected, but Android did not finish booting within 360 seconds.' >&2
+  echo '--- ADB devices ---' >&2
+  adb devices -l >&2 || true
+  echo '--- Boot property ---' >&2
+  timeout 15s adb -s emulator-5554 shell getprop sys.boot_completed >&2 || true
+  echo '--- Emulator log (last 160 lines) ---' >&2
+  tail -n 160 "$EMULATOR_LOG" >&2 || true
+  exit 1
+fi
 # Set immediately after verified boot, before starting optional access services.
 touch /tmp/cloud-android-boot-complete
 adb shell svc power stayon true || true

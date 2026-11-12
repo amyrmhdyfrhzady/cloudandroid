@@ -65,17 +65,23 @@ jobs:
       - name: Install Android 17 image and create AVD
         run: |
           set -euo pipefail
-          # sdkmanager may close stdin as soon as all licenses are accepted.
-          # With pipefail, the resulting SIGPIPE from `yes` incorrectly fails the step.
-          set +o pipefail
-          yes | sdkmanager --licenses >/dev/null
-          SDK_LICENSE_STATUS=${PIPESTATUS[1]}
-          set -o pipefail
-          if (( SDK_LICENSE_STATUS != 0 )); then
-            echo "sdkmanager license acceptance failed (exit ${SDK_LICENSE_STATUS})." >&2
-            exit "$SDK_LICENSE_STATUS"
-          fi
-          sdkmanager --install 'platform-tools' 'emulator' 'platforms;android-37.1' "$SYSTEM_IMAGE"
+          # Feed license answers through subprocess.communicate() instead of
+          # `yes | sdkmanager`: sdkmanager closes stdin when finished, causing
+          # `yes` to report SIGPIPE/Broken pipe and fail this step under errexit.
+          python3 - <<'PY'
+          import subprocess
+          result = subprocess.run(
+              ["sdkmanager", "--licenses"],
+              input=("y\\n" * 200),
+              text=True,
+              check=False,
+          )
+          if result.returncode:
+              raise SystemExit(f"sdkmanager --licenses failed with exit code {result.returncode}")
+          PY
+
+          # Keep installation output visible and preserve sdkmanager's real exit code.
+          timeout 1800s sdkmanager --install --verbose 'platform-tools' 'emulator' 'platforms;android-37.1' "$SYSTEM_IMAGE"
           bash scripts/create-avd.sh
 
       - name: Restore latest encrypted phone snapshot
