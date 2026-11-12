@@ -1,0 +1,94 @@
+name: Cloud Android 17
+
+on:
+  workflow_dispatch:
+    inputs:
+      continuous:
+        description: 'Start the next runner automatically after saving state'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  actions: write
+
+# A single persistent phone must never be mounted by two runners at once.
+concurrency:
+  group: cloud-android-single-instance
+  cancel-in-progress: false
+
+jobs:
+  android:
+    name: Android 17 session
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      ANDROID_API: '37.1'
+      ANDROID_RUNTIME_MINUTES: '270'
+      AVD_NAME: cloud-android
+      SYSTEM_IMAGE: system-images;android-37.1;google_apis_playstore_ps16k;x86_64
+      STATE_CHUNK_MIB: '1800'
+      CONTINUOUS: ${{ inputs.continuous }}
+      STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+      WEB_ACCESS_USER: ${{ secrets.WEB_ACCESS_USER }}
+      WEB_ACCESS_PASSWORD: ${{ secrets.WEB_ACCESS_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${STATE_ENCRYPTION_KEY:-}" =~ ^[0-9a-fA-F]{64}$ ]] || {
+            echo 'STATE_ENCRYPTION_KEY must be exactly 64 hexadecimal characters.' >&2
+            exit 1
+          }
+          [[ -n "${WEB_ACCESS_USER:-}" && -n "${WEB_ACCESS_PASSWORD:-}" ]] || {
+            echo 'Set WEB_ACCESS_USER and WEB_ACCESS_PASSWORD repository secrets.' >&2
+            exit 1
+          }
+          if (( ${#WEB_ACCESS_PASSWORD} < 16 )); then
+            echo 'WEB_ACCESS_PASSWORD must be at least 16 characters.' >&2
+            exit 1
+          fi
+
+      - name: Checkout project
+        uses: actions/checkout@v7
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install host dependencies
+        run: bash scripts/install-host.sh
+
+      - name: Install Android 17 image and create AVD
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --install 'platform-tools' 'emulator' 'platforms;android-37.1' "$SYSTEM_IMAGE"
+          bash scripts/create-avd.sh
+
+      - name: Restore latest encrypted phone snapshot
+        run: bash scripts/restore-state.sh
+
+      - name: Start Android, VNC, ADB terminal and access tunnel
+        run: bash scripts/start-session.sh
+
+      - name: Keep Android online
+        run: |
+          set -euo pipefail
+          echo "Android will remain online for ${ANDROID_RUNTIME_MINUTES} minutes."
+          sleep "$((ANDROID_RUNTIME_MINUTES * 60))"
+
+      - name: Save encrypted snapshot and rotate old releases
+        if: always()
+        run: bash scripts/save-state.sh
+
+      - name: Queue the next runner
+        if: success() && env.CONTINUOUS == 'true'
+        run: bash scripts/dispatch-next.sh
+
+      - name: Stop local services
+        if: always()
+        run: bash scripts/shutdown.sh
