@@ -65,7 +65,16 @@ jobs:
       - name: Install Android 17 image and create AVD
         run: |
           set -euo pipefail
+          # sdkmanager may close stdin as soon as all licenses are accepted.
+          # With pipefail, the resulting SIGPIPE from `yes` incorrectly fails the step.
+          set +o pipefail
           yes | sdkmanager --licenses >/dev/null
+          SDK_LICENSE_STATUS=${PIPESTATUS[1]}
+          set -o pipefail
+          if (( SDK_LICENSE_STATUS != 0 )); then
+            echo "sdkmanager license acceptance failed (exit ${SDK_LICENSE_STATUS})." >&2
+            exit "$SDK_LICENSE_STATUS"
+          fi
           sdkmanager --install 'platform-tools' 'emulator' 'platforms;android-37.1' "$SYSTEM_IMAGE"
           bash scripts/create-avd.sh
 

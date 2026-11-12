@@ -106,12 +106,14 @@ adb logcat
 
 ## عیب‌یابی اولیه
 
-1. **`/dev/kvm` unavailable:** شتاب‌دهی سخت‌افزاری در Runner در دسترس نیست؛ اجرای Emulator ممکن است بسیار کند یا ناموفق باشد.
-2. **System image not found:** بررسی کن `system-images;android-37.1;google_apis_playstore_ps16k;x86_64` در SDK Manager موجود باشد. در صورت تغییر نام بسته، مقدار `SYSTEM_IMAGE` در Workflow و `create-avd.sh` را هماهنگ تغییر بده.
-3. **Release upload failed:** مجوز `contents: write`، فضای دیسک Runner و تعداد/اندازه قطعات را بررسی کن.
-4. **Next run not queued:** مجوز `actions: write` و وضعیت concurrency را بررسی کن.
-5. **Quick Tunnel URL not printed:** Log فایل `/tmp/cloud-android-cloudflared.log` را در همان Job بررسی کن.
-6. **Snapshot restore failed:** Release قبلی را حذف نکن؛ کلید، `manifest.json` و SHA-256 را بررسی کن.
+1. **`yes: standard output: Broken pipe` هنگام پذیرش لایسنس‌ها:** این خطا از بسته‌شدن زودهنگام stdin توسط `sdkmanager` می‌آید؛ نسخه اصلاح‌شده Workflow خروجی مرحله دوم Pipeline را جداگانه بررسی می‌کند و SIGPIPE دستور `yes` را شکست Job حساب نمی‌کند. هشدار deprecated بودن `sdkmanager` به‌تنهایی خطا نیست.
+2. **`userdata-qemu.img is missing or empty`:** معمولاً یعنی Emulator هنوز با موفقیت Boot نشده است. نسخه اصلاح‌شده فقط پس از مشاهده `sys.boot_completed=1` فایل marker می‌سازد و اگر Boot انجام نشده باشد، مرحله Save را بدون انتشار Snapshot رد می‌کند؛ در نتیجه خطای ذخیره‌سازی دیگر خطای اصلی را پنهان نمی‌کند.
+3. **`/dev/kvm` unavailable:** شتاب‌دهی سخت‌افزاری در Runner در دسترس نیست؛ اجرای Emulator ممکن است بسیار کند یا ناموفق باشد.
+4. **System image not found:** بررسی کن `system-images;android-37.1;google_apis_playstore_ps16k;x86_64` در SDK Manager موجود باشد. در صورت تغییر نام بسته، مقدار `SYSTEM_IMAGE` در Workflow و `create-avd.sh` را هماهنگ تغییر بده.
+5. **Release upload failed:** مجوز `contents: write`، فضای دیسک Runner و تعداد/اندازه قطعات را بررسی کن.
+6. **Next run not queued:** مجوز `actions: write` و وضعیت concurrency را بررسی کن.
+7. **Quick Tunnel URL not printed:** Log فایل `/tmp/cloud-android-cloudflared.log` را در همان Job بررسی کن.
+8. **Snapshot restore failed:** Release قبلی را حذف نکن؛ کلید، `manifest.json` و SHA-256 را بررسی کن.
 
 ## مجوز
 
