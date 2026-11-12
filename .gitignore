@@ -1,0 +1,6 @@
+.env
+*.img
+*.qcow2
+*.enc
+*.tar.zst
+state-*.bin
