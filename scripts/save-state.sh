@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This workflow step runs with `always()` so it can save after later failures.
+# But if setup/boot failed, there is no valid running phone state to publish.
+if [[ ! -f /tmp/cloud-android-boot-complete ]]; then
+  echo 'Android never reached sys.boot_completed=1; skipping snapshot publication.'
+  exit 0
+fi
+
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${STATE_ENCRYPTION_KEY:?STATE_ENCRYPTION_KEY is required}"

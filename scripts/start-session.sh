@@ -59,6 +59,10 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl restart nginx
 
+# A marker prevents the always-run save step from trying to publish a disk
+# when setup or emulator boot failed before a usable Android instance existed.
+rm -f /tmp/cloud-android-boot-complete
+
 # Start the emulator with the persistent userdata image in the AVD directory.
 emulator -avd "$AVD_NAME" -gpu swiftshader_indirect -no-snapshot -no-boot-anim -no-audio \
   -camera-back none -camera-front none >/tmp/cloud-android-emulator.log 2>&1 &
@@ -74,6 +78,8 @@ done
   tail -n 100 /tmp/cloud-android-emulator.log || true
   exit 1
 }
+# Set immediately after verified boot, before starting optional access services.
+touch /tmp/cloud-android-boot-complete
 adb shell svc power stayon true || true
 adb shell settings put system screen_off_timeout 2147483647 || true
 adb shell input keyevent 82 || true
