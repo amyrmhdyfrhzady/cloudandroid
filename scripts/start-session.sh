@@ -10,19 +10,13 @@ export ANDROID_HOME
 export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 
-# Start a virtual display and a lightweight window manager for the emulator UI.
-export DISPLAY=:0
-Xvfb :0 -screen 0 1440x2560x24 -ac +extension RANDR >/tmp/cloud-android-xvfb.log 2>&1 &
-echo $! >/tmp/cloud-android-xvfb.pid
-sleep 2
-openbox >/tmp/cloud-android-openbox.log 2>&1 &
-echo $! >/tmp/cloud-android-openbox.pid
-
-# VNC is loopback-only; all remote HTTP access is protected by nginx Basic Auth.
-x11vnc -display :0 -localhost -nopw -forever -shared -rfbport 5900 >/tmp/cloud-android-vnc.log 2>&1 &
-echo $! >/tmp/cloud-android-vnc.pid
-websockify --web=/usr/share/novnc 127.0.0.1:6081 127.0.0.1:5900 >/tmp/cloud-android-websockify.log 2>&1 &
-echo $! >/tmp/cloud-android-websockify.pid
+# The emulator runs headless. stream-droid provides the interactive browser UI
+# directly from ADB/scrcpy, so no X11/VNC desktop is needed.
+: "${ANDROID_HOME:=/usr/local/lib/android/sdk}"
+: "${ANDROID_SDK_ROOT:=$ANDROID_HOME}"
+export ANDROID_HOME ANDROID_SDK_ROOT
+export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+: "${STREAM_DROID_PORT:=3200}"
 
 # Generate a bcrypt htpasswd file without putting the password in process arguments.
 printf '%s\n' "$WEB_ACCESS_PASSWORD" | sudo htpasswd -i -B -c /etc/nginx/.cloud-android.htpasswd "$WEB_ACCESS_USER"
@@ -46,12 +40,17 @@ server {
     }
 
     location / {
-        proxy_pass http://127.0.0.1:6081/;
+        proxy_pass http://127.0.0.1:3200;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
     }
 }
 NGINX
@@ -100,7 +99,7 @@ fi
 
 echo "Starting Android Emulator (AVD: $AVD_NAME)..."
 emulator -avd "$AVD_NAME" -port 5554 -accel auto \
-  -gpu swiftshader_indirect -no-snapshot -no-boot-anim -no-audio \
+  -gpu swiftshader_indirect -no-window -no-snapshot -no-boot-anim -no-audio \
   -camera-back none -camera-front none -verbose \
   >"$EMULATOR_LOG" 2>&1 &
 EMULATOR_PID=$!
@@ -143,39 +142,98 @@ if (( DEVICE_READY == 0 )); then
   exit 1
 fi
 
-# An online ADB transport does not mean Android has completed booting.
+# ADB becoming online and sys.boot_completed=1 are not enough: wait for
+# boot animation shutdown, Package Manager readiness and a resolvable HOME.
 BOOTED=0
-for elapsed in $(seq 1 360); do
+STABLE_READY=0
+for elapsed in $(seq 1 120); do
   BOOT_PROP="$(timeout 15s adb -s emulator-5554 shell getprop sys.boot_completed 2>>"$ADB_LOG" | tr -d '\r' || true)"
-  if [[ "$BOOT_PROP" == '1' ]]; then
-    BOOTED=1
-    echo "Android boot completed after approximately ${elapsed} seconds."
-    break
+  BOOT_ANIM="$(timeout 15s adb -s emulator-5554 shell getprop init.svc.bootanim 2>>"$ADB_LOG" | tr -d '\r' || true)"
+  PACKAGE_READY=0
+  HOME_ACTIVITY=''
+  if [[ "$BOOT_PROP" == '1' && "$BOOT_ANIM" != 'running' ]]; then
+    if timeout 20s adb -s emulator-5554 shell 'service check package' 2>>"$ADB_LOG" | grep -q 'found'; then
+      PACKAGE_READY=1
+      HOME_ACTIVITY="$(timeout 20s adb -s emulator-5554 shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>>"$ADB_LOG" | tr -d '\r' | tail -n 1 || true)"
+    fi
   fi
 
-  if (( elapsed % 15 == 0 )); then
-    echo "Android is still booting (${elapsed}/360 seconds)..."
+  if [[ "$BOOT_PROP" == '1' && "$BOOT_ANIM" != 'running' && "$PACKAGE_READY" == '1' && -n "$HOME_ACTIVITY" && "$HOME_ACTIVITY" != 'No activity found' ]]; then
+    STABLE_READY=$((STABLE_READY + 1))
+    if (( STABLE_READY >= 3 )); then
+      BOOTED=1
+      echo "Android framework, Package Manager and HOME are ready (checked for 3 consecutive intervals; ${elapsed}s)."
+      break
+    fi
+  else
+    STABLE_READY=0
+  fi
+
+  if (( elapsed % 4 == 0 )); then
+    echo "Waiting for complete Android startup (approximately $((elapsed * 5))/600 seconds)..."
+    echo "sys.boot_completed=${BOOT_PROP:-unset}; init.svc.bootanim=${BOOT_ANIM:-unset}; package_ready=${PACKAGE_READY}; home=${HOME_ACTIVITY:-not-ready}"
     timeout 15s adb -s emulator-5554 shell getprop dev.bootcomplete 2>&1 | tail -n 2 || true
     tail -n 20 "$EMULATOR_LOG" || true
   fi
-  sleep 1
+  sleep 5
 done
 
 if (( BOOTED == 0 )); then
-  echo 'ERROR: Emulator connected, but Android did not finish booting within 360 seconds.' >&2
-  echo '--- ADB devices ---' >&2
-  adb devices -l >&2 || true
-  echo '--- Boot property ---' >&2
-  timeout 15s adb -s emulator-5554 shell getprop sys.boot_completed >&2 || true
-  echo '--- Emulator log (last 160 lines) ---' >&2
-  tail -n 160 "$EMULATOR_LOG" >&2 || true
+  echo 'ERROR: Android did not reach a stable, usable HOME state within 600 seconds.' >&2
+  echo '--- Boot properties ---' >&2
+  timeout 20s adb -s emulator-5554 shell 'getprop sys.boot_completed; getprop init.svc.bootanim; getprop dev.bootcomplete' >&2 || true
+  echo '--- Package and HOME readiness ---' >&2
+  timeout 20s adb -s emulator-5554 shell 'service check package; cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME' >&2 || true
+  echo '--- Recent Android errors ---' >&2
+  timeout 30s adb -s emulator-5554 logcat -b all -d -v time -t 1200 2>&1 | grep -iE 'fatal|crash|watchdog|boot|package manager|system_server|zygote|setupwizard' | tail -n 180 >&2 || true
+  timeout 20s adb -s emulator-5554 exec-out screencap -p >/tmp/cloud-android-boot-failure.png 2>/dev/null || true
+  timeout 30s adb -s emulator-5554 logcat -b all -d -v time -t 2500 >/tmp/cloud-android-boot-failure-logcat.txt 2>/dev/null || true
+  echo '--- Emulator log (last 200 lines) ---' >&2
+  tail -n 200 "$EMULATOR_LOG" >&2 || true
   exit 1
 fi
-# Set immediately after verified boot, before starting optional access services.
-touch /tmp/cloud-android-boot-complete
+
+# Skip the first-run welcome wizard on this disposable emulator profile and
+# bring the actual launcher to the foreground for a usable remote session.
+adb shell settings put global device_provisioned 1 || true
+adb shell settings put secure user_setup_complete 1 || true
+adb shell am force-stop com.google.android.setupwizard >/dev/null 2>&1 || true
 adb shell svc power stayon true || true
 adb shell settings put system screen_off_timeout 2147483647 || true
+adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.HOME || true
+sleep 5
 adb shell input keyevent 82 || true
+# Set only after the framework is ready and the launcher has been requested.
+touch /tmp/cloud-android-boot-complete
+
+# Start the full interactive browser controller (video, touch, keyboard,
+# navigation and clipboard) against the already-running emulator.
+if ! command -v npx >/dev/null 2>&1; then
+  echo 'ERROR: Node.js/npm is missing; browser control cannot start.' >&2
+  exit 1
+fi
+npx --yes stream-droid@latest --serial emulator-5554 --capture scrcpy --headless --port "$STREAM_DROID_PORT" \
+  >/tmp/cloud-android-stream-droid.log 2>&1 &
+echo $! >/tmp/cloud-android-stream-droid.pid
+STREAM_READY=0
+for elapsed in $(seq 1 120); do
+  if curl -fsS "http://127.0.0.1:${STREAM_DROID_PORT}/" -o /tmp/cloud-android-stream-droid.html; then
+    STREAM_READY=1
+    echo "Browser controller is ready on port ${STREAM_DROID_PORT}."
+    break
+  fi
+  if ! kill -0 "$(cat /tmp/cloud-android-stream-droid.pid)" 2>/dev/null; then
+    echo 'ERROR: stream-droid exited during startup.' >&2
+    tail -n 120 /tmp/cloud-android-stream-droid.log >&2 || true
+    exit 1
+  fi
+  sleep 2
+done
+if (( STREAM_READY == 0 )); then
+  echo 'ERROR: Browser controller did not become ready within 240 seconds.' >&2
+  tail -n 160 /tmp/cloud-android-stream-droid.log >&2 || true
+  exit 1
+fi
 
 # Start a restricted ADB-only browser terminal.
 ttyd --port 7681 --writable --base-path /terminal "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}/scripts/adb-terminal.sh" \
@@ -204,11 +262,11 @@ fi
   echo "- **URL:** ${TUNNEL_URL}"
   echo "- **HTTP username:** ${WEB_ACCESS_USER}"
   echo '- **HTTP password:** the value stored in the `WEB_ACCESS_PASSWORD` repository secret'
-  echo '- **VNC:** open the URL in a browser; noVNC is served at the root path.'
+  echo '- **Android control:** open the URL for the live stream-droid screen; tap, swipe, keyboard, navigation and clipboard controls are available.'
   echo '- **ADB terminal:** open `/terminal/` after signing in, then run commands such as `adb devices` and `adb shell`.'
   echo
   echo "Android 17 booted. Runtime target: ${ANDROID_RUNTIME_MINUTES} minutes."
 } >> "$GITHUB_STEP_SUMMARY"
 
 echo "Cloud Android is available at: $TUNNEL_URL"
-echo 'Open the URL and authenticate using WEB_ACCESS_USER / WEB_ACCESS_PASSWORD.'
+echo 'Open the URL and authenticate using WEB_ACCESS_USER / WEB_ACCESS_PASSWORD. The root page is the interactive Android controller.'

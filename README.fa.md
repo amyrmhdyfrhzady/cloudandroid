@@ -7,7 +7,7 @@
 ## امکانات
 
 - Android 17 QPR1 / API 37.1 با Google Play system image و معماری x86_64.
-- VNC تصویری از طریق noVNC در مرورگر.
+- نمایش زنده و کنترل کامل اندروید در مرورگر با stream-droid و scrcpy؛ شامل لمس، کشیدن، کیبورد، ناوبری و Clipboard.
 - ترمینال مرورگری محدود به اجرای دستورهای `adb`؛ برای نمونه `adb devices` و `adb shell`.
 - بازیابی `userdata-qemu.img` و `sdcard.img` از آخرین Release معتبر.
 - فشرده‌سازی Zstandard، رمزگذاری AES-256-GCM و تقسیم فایل به قطعات ۱۸۰۰ MiB.
@@ -22,7 +22,7 @@ GitHub Actions Runner (موقت)
   ├── Android Emulator 17
   ├── userdata-qemu.img  ─┐
   ├── sdcard.img         ─┴─> tar + zstd -> AES-256-GCM -> split
-  ├── noVNC + VNC                 |
+  ├── stream-droid + scrcpy       |
   ├── ADB-only browser terminal   v
   └── Cloudflare Quick Tunnel   GitHub Releases (عمومی، ولی داده رمزگذاری‌شده)
                                   |
@@ -80,7 +80,7 @@ bash scripts/generate-key.sh
 
 پس از Boot، لینک Quick Tunnel در **Summary** همان Job و در Log مرحله دسترسی نمایش داده می‌شود. آن را در مرورگر باز کنید و با `WEB_ACCESS_USER` و `WEB_ACCESS_PASSWORD` وارد شوید.
 
-- صفحه اصلی: محیط تصویری noVNC.
+- صفحه اصلی: کنترلر تعاملی stream-droid؛ تصویر زنده، لمس/Swipe، کیبورد، Back/Home/Recents و Clipboard. برای بهترین تجربه از مرورگر به‌روز استفاده کن.
 - مسیر `/terminal/`: ترمینال ADB. مثال‌ها:
 
 ```text
@@ -107,7 +107,7 @@ adb logcat
 ## عیب‌یابی اولیه
 
 1. **`yes: standard output: Broken pipe` هنگام پذیرش لایسنس‌ها:** این خطا از بسته‌شدن زودهنگام stdin توسط `sdkmanager` می‌آید؛ نسخه اصلاح‌شده Workflow خروجی مرحله دوم Pipeline را جداگانه بررسی می‌کند و SIGPIPE دستور `yes` را شکست Job حساب نمی‌کند. هشدار deprecated بودن `sdkmanager` به‌تنهایی خطا نیست.
-2. **`userdata-qemu.img is missing or empty`:** معمولاً یعنی Emulator هنوز با موفقیت Boot نشده است. نسخه اصلاح‌شده فقط پس از مشاهده `sys.boot_completed=1` فایل marker می‌سازد و اگر Boot انجام نشده باشد، مرحله Save را بدون انتشار Snapshot رد می‌کند؛ در نتیجه خطای ذخیره‌سازی دیگر خطای اصلی را پنهان نمی‌کند.
+2. **`userdata-qemu.img is missing or empty`:** معمولاً یعنی Emulator هنوز با موفقیت Boot نشده است. نسخه جدید علاوه بر `sys.boot_completed=1`، توقف boot animation، آماده‌شدن Package Manager و قابل resolve بودن HOME را در چند بررسی متوالی می‌سنجد و سپس لانچر را اجرا می‌کند؛ در نتیجه خطای ذخیره‌سازی دیگر خطای اصلی را پنهان نمی‌کند.
 3. **`/dev/kvm` unavailable:** شتاب‌دهی سخت‌افزاری در Runner در دسترس نیست؛ اجرای Emulator ممکن است بسیار کند یا ناموفق باشد.
 4. **System image not found:** بررسی کن `system-images;android-37.1;google_apis_playstore_ps16k;x86_64` در SDK Manager موجود باشد. در صورت تغییر نام بسته، مقدار `SYSTEM_IMAGE` در Workflow و `create-avd.sh` را هماهنگ تغییر بده.
 5. **Release upload failed:** مجوز `contents: write`، فضای دیسک Runner و تعداد/اندازه قطعات را بررسی کن.
@@ -122,3 +122,8 @@ MIT. Android، GitHub و Cloudflare علائم تجاری متعلق به صاح
 ### خطای `Unknown AVD name` یا نبودن `cloud-android.ini`
 
 این خطا یعنی Emulator فایل metadata مربوط به AVD را در مسیر `ANDROID_AVD_HOME` پیدا نکرده است. نسخه v4 مسیر `ANDROID_AVD_HOME` را در ساخت، بازیابی، اجرا و ذخیره‌سازی یکسان می‌کند؛ بعد از ساخت نیز وجود فایل `.ini` و شناسایی نام AVD را قبل از اجرای Emulator بررسی می‌کند. اگر metadata ساخته نشود، Job همان مرحله با گزارش فهرست AVDها متوقف می‌شود و دیگر ۱۸۰ ثانیه منتظر ADB نمی‌ماند.
+
+
+### کنترل مرورگری به‌جای VNC
+
+رابط قبلی noVNC حذف شده است. Emulator به‌صورت headless اجرا می‌شود و `stream-droid` ([مخزن پروژه](https://github.com/davidokonji/stream-droid)) با backend مبتنی بر scrcpy تصویر و کنترل را از طریق ADB ارائه می‌کند. صفحه اصلی شامل نمایش زنده، لمس، Swipe، تایپ، کلیدهای Back/Home/Recents و Clipboard است. مسیر `/terminal/` همچنان برای ترمینال ADB در دسترس است. تمام مسیرها پشت Basic Auth در nginx و Cloudflare Quick Tunnel قرار دارند.

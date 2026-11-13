@@ -87,7 +87,12 @@ jobs:
       - name: Restore latest encrypted phone snapshot
         run: bash scripts/restore-state.sh
 
-      - name: Start Android, VNC, ADB terminal and access tunnel
+      - name: Set up Node.js for browser control
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Start Android, browser control, ADB terminal and access tunnel
         run: bash scripts/start-session.sh
 
       - name: Keep Android online
@@ -95,6 +100,19 @@ jobs:
           set -euo pipefail
           echo "Android will remain online for ${ANDROID_RUNTIME_MINUTES} minutes."
           sleep "$((ANDROID_RUNTIME_MINUTES * 60))"
+
+      - name: Upload Android boot diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-android-diagnostics
+          path: |
+            /tmp/cloud-android-boot-failure.png
+            /tmp/cloud-android-boot-failure-logcat.txt
+            /tmp/cloud-android-emulator.log
+            /tmp/cloud-android-stream-droid.log
+          if-no-files-found: ignore
+          retention-days: 1
 
       - name: Save encrypted snapshot and rotate old releases
         if: always()

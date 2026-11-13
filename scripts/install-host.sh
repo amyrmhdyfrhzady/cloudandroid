@@ -4,7 +4,7 @@ set -euo pipefail
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   qemu-kvm libvirt-daemon-system libvirt-clients cpu-checker \
-  xvfb openbox x11vnc novnc websockify nginx apache2-utils \
+  nginx apache2-utils \
   zstd jq curl unzip python3-venv python3-pip ca-certificates
 
 if [[ -e /dev/kvm ]]; then
